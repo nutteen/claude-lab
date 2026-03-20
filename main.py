@@ -330,7 +330,11 @@ For a money transfer to be approved, ALL of the following must be true:
 """
 
 
-async def validate_trade_documents(invoice_path: str, po_path: str) -> None:
+async def validate_trade_documents(
+    invoice_path: str,
+    po_path: str,
+    case_label: str = "",
+) -> None:
     """Run the trade finance validation agent on a given invoice and PO file."""
 
     with open(invoice_path) as f:
@@ -372,9 +376,13 @@ Steps:
         ],
     )
 
-    print("=" * 60)
-    print("  TRADE FINANCE DOCUMENT VALIDATION AGENT")
-    print("=" * 60)
+    label = f"  {case_label}  " if case_label else "  TRADE FINANCE DOCUMENT VALIDATION AGENT  "
+    border = "=" * max(60, len(label) + 4)
+    print(f"\n{border}")
+    print(label)
+    print(f"  Invoice : {invoice_path}")
+    print(f"  PO      : {po_path}")
+    print(border)
 
     async with ClaudeSDKClient(options=options) as client:
         await client.query(prompt)
@@ -384,16 +392,37 @@ Steps:
                     if isinstance(block, TextBlock):
                         print(block.text)
             elif isinstance(message, ResultMessage):
-                print("\n" + "=" * 60)
-                print(f"  Agent finished. Stop reason: {message.stop_reason}")
-                print("=" * 60)
+                print(f"\n{border}")
+                print(f"  Done — stop reason: {message.stop_reason}")
+                print(border)
+
+
+# ─── Test Cases ───────────────────────────────────────────────────────────────
+
+TEST_CASES = [
+    {
+        "label": "CASE 1 — SUCCESS: All information matches, transfer should be APPROVED",
+        "invoice": "sample_invoice_success.json",
+        "po": "sample_po_success.json",
+    },
+    {
+        "label": "CASE 2 — FAILURE: Mandatory information mismatches, transfer should be REJECTED",
+        "invoice": "sample_invoice_failure.json",
+        "po": "sample_po_failure.json",
+    },
+]
 
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
+async def run_all_cases() -> None:
+    for case in TEST_CASES:
+        await validate_trade_documents(
+            invoice_path=case["invoice"],
+            po_path=case["po"],
+            case_label=case["label"],
+        )
+
+
 if __name__ == "__main__":
-    anyio.run(
-        validate_trade_documents,
-        "sample_invoice.json",
-        "sample_po.json",
-    )
+    anyio.run(run_all_cases)

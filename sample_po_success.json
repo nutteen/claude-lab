@@ -1,0 +1,31 @@
+{
+  "po_number": "PO-2024-0099",
+  "po_date": "2024-03-01",
+  "buyer_name": "Siam Commerce Co., Ltd.",
+  "buyer_address": "200 Sathorn Tower, Bangkok 10120, Thailand",
+  "buyer_contact": "procurement@siamcommerce.th",
+  "seller_name": "GlobalTech Exports Ltd.",
+  "seller_address": "88 Trade Park, Singapore 018956",
+  "line_items": [
+    {
+      "description": "Industrial Electronic Components Model XR-200",
+      "quantity": 500,
+      "unit_price": 45.00,
+      "total": 22500.00
+    },
+    {
+      "description": "Connector Assembly Kit Type-B",
+      "quantity": 200,
+      "unit_price": 12.50,
+      "total": 2500.00
+    }
+  ],
+  "total_amount": 25000.00,
+  "currency": "USD",
+  "payment_terms": "Net 30",
+  "delivery_date": "2024-04-01",
+  "delivery_address": "200 Sathorn Tower, Bangkok 10120, Thailand",
+  "incoterms": "CIF Bangkok",
+  "authorized_signatory": "Somchai Charoenwong",
+  "status": "APPROVED"
+}
