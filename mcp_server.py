@@ -17,10 +17,16 @@ Run modes:
 
 import argparse
 import json
+import sys
 import anthropic
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("trade-finance-validator")
+# Parse port early so FastMCP is initialized with the correct value.
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--port", type=int, default=8000)
+_known, _ = _parser.parse_known_args()
+
+mcp = FastMCP("trade-finance-validator", host="0.0.0.0", port=_known.port)
 _client = anthropic.Anthropic()
 
 
@@ -372,7 +378,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.sse:
-        print(f"Starting MCP server (SSE) on http://localhost:{args.port}/sse")
-        mcp.run(transport="sse", port=args.port)
+        print(f"Starting MCP server (SSE) on http://0.0.0.0:{args.port}/sse")
+        mcp.run(transport="sse")
     else:
         mcp.run(transport="stdio")
