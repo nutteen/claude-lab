@@ -1,0 +1,35 @@
+{
+  "invoice_number": "INV-2024-0042",
+  "invoice_date": "2024-03-15",
+  "seller_name": "GlobalTech Exports Ltd.",
+  "seller_address": "88 Trade Park, Singapore 018956",
+  "seller_bank": "DBS Bank, Account: 0012-345678, SWIFT: DBSSSGSG",
+  "buyer_name": "Siam Commerce Co., Ltd.",
+  "buyer_address": "200 Sathorn Tower, Bangkok 10120, Thailand",
+  "po_reference": "PO-2024-0099",
+  "line_items": [
+    {
+      "description": "Industrial Electronic Components Model XR-200",
+      "quantity": 500,
+      "unit_price": 45.00,
+      "total": 22500.00
+    },
+    {
+      "description": "Connector Assembly Kit Type-B",
+      "quantity": 200,
+      "unit_price": 12.50,
+      "total": 2500.00
+    }
+  ],
+  "subtotal": 25000.00,
+  "total_amount": 25000.00,
+  "currency": "USD",
+  "payment_terms": "Net 30",
+  "due_date": "2024-04-14",
+  "bank_details": {
+    "bank_name": "DBS Bank",
+    "account_number": "0012-345678",
+    "swift_code": "DBSSSGSG",
+    "account_name": "GlobalTech Exports Ltd."
+  }
+}
