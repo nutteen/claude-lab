@@ -5,6 +5,7 @@ Validates Invoice and Purchase Order (PO) documents before approving money trans
 
 import anyio
 import json
+import anthropic
 from claude_agent_sdk import (
     tool,
     create_sdk_mcp_server,
@@ -14,6 +15,8 @@ from claude_agent_sdk import (
     TextBlock,
     ResultMessage,
 )
+
+_anthropic_client = anthropic.Anthropic()
 
 
 # ─── Validation Tools ─────────────────────────────────────────────────────────
@@ -190,6 +193,58 @@ async def validate_po(args):
 
 
 @tool(
+    "ai_compare_fields",
+    "Use AI to semantically compare two field values that may represent the same thing "
+    "despite different phrasing, abbreviations, or formatting. Use this for company names, "
+    "addresses, and line item descriptions where exact string matching is unreliable. "
+    "Returns a JSON result with match decision, confidence, and reasoning.",
+    {"field_name": str, "value_a": str, "value_b": str},
+)
+async def ai_compare_fields(args):
+    field_name = args["field_name"]
+    value_a = args["value_a"]
+    value_b = args["value_b"]
+
+    response = _anthropic_client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=512,
+        thinking={"type": "adaptive"},
+        system=(
+            "You are a trade finance compliance expert. Your job is to determine whether "
+            "two field values from different documents refer to the same real-world entity. "
+            "Consider abbreviations, legal suffixes (Ltd/Limited/LLC), address formats, "
+            "product name variations, and common paraphrasing. "
+            "Respond ONLY with a JSON object — no extra text."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Field: {field_name}\n"
+                f"Value A: {value_a}\n"
+                f"Value B: {value_b}\n\n"
+                "Do these two values refer to the same entity?\n"
+                "Respond with this exact JSON structure:\n"
+                '{{"match": true/false, "confidence": "high/medium/low", "reasoning": "..."}}'
+            ),
+        }],
+    )
+
+    raw = next(b.text for b in response.content if b.type == "text")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = {"match": False, "confidence": "low", "reasoning": raw}
+
+    result = {
+        "field": field_name,
+        "value_a": value_a,
+        "value_b": value_b,
+        **parsed,
+    }
+    return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
+
+
+@tool(
     "cross_validate_invoice_po",
     "Cross-validate an Invoice against its corresponding Purchase Order to detect "
     "discrepancies before approving a money transfer. Both inputs are JSON strings.",
@@ -205,7 +260,9 @@ async def cross_validate_invoice_po(args):
     discrepancies = []
     matches = []
 
-    # 1. PO reference in invoice must match PO number
+    # ── Deterministic checks (exact values only) ──────────────────────────────
+
+    # 1. PO reference — exact code match required
     inv_po_ref = (invoice.get("po_reference") or "").strip()
     po_number = (po.get("po_number") or "").strip()
     if inv_po_ref and po_number and inv_po_ref == po_number:
@@ -216,29 +273,7 @@ async def cross_validate_invoice_po(args):
             f"but PO number is '{po_number}'"
         )
 
-    # 2. Buyer name must match
-    inv_buyer = (invoice.get("buyer_name") or "").strip().lower()
-    po_buyer = (po.get("buyer_name") or "").strip().lower()
-    if inv_buyer and po_buyer and inv_buyer == po_buyer:
-        matches.append(f"Buyer name matches: {invoice.get('buyer_name')}")
-    else:
-        discrepancies.append(
-            f"Buyer name mismatch — Invoice: '{invoice.get('buyer_name')}', "
-            f"PO: '{po.get('buyer_name')}'"
-        )
-
-    # 3. Seller name must match
-    inv_seller = (invoice.get("seller_name") or "").strip().lower()
-    po_seller = (po.get("seller_name") or "").strip().lower()
-    if inv_seller and po_seller and inv_seller == po_seller:
-        matches.append(f"Seller name matches: {invoice.get('seller_name')}")
-    else:
-        discrepancies.append(
-            f"Seller name mismatch — Invoice: '{invoice.get('seller_name')}', "
-            f"PO: '{po.get('seller_name')}'"
-        )
-
-    # 4. Currency must match
+    # 2. Currency — exact ISO code match required
     inv_currency = invoice.get("currency", "")
     po_currency = po.get("currency", "")
     if inv_currency == po_currency:
@@ -248,7 +283,7 @@ async def cross_validate_invoice_po(args):
             f"Currency mismatch — Invoice: '{inv_currency}', PO: '{po_currency}'"
         )
 
-    # 5. Invoice amount must not exceed PO amount
+    # 3. Invoice amount must not exceed PO amount
     inv_total = invoice.get("total_amount", 0)
     po_total = po.get("total_amount", 0)
     if inv_total <= po_total:
@@ -262,7 +297,7 @@ async def cross_validate_invoice_po(args):
             "over-invoicing detected"
         )
 
-    # 6. Payment terms must match
+    # 4. Payment terms — exact match required
     inv_terms = (invoice.get("payment_terms") or "").strip()
     po_terms = (po.get("payment_terms") or "").strip()
     if inv_terms and po_terms and inv_terms == po_terms:
@@ -272,38 +307,52 @@ async def cross_validate_invoice_po(args):
             f"Payment terms mismatch — Invoice: '{inv_terms}', PO: '{po_terms}'"
         )
 
-    # 7. Line item descriptions should align
-    inv_descriptions = {item.get("description", "").strip().lower() for item in invoice.get("line_items", [])}
-    po_descriptions = {item.get("description", "").strip().lower() for item in po.get("line_items", [])}
-    if inv_descriptions == po_descriptions:
-        matches.append("All line item descriptions match between Invoice and PO")
-    else:
-        only_in_invoice = inv_descriptions - po_descriptions
-        only_in_po = po_descriptions - inv_descriptions
-        if only_in_invoice:
-            discrepancies.append(f"Items in Invoice not found in PO: {only_in_invoice}")
-        if only_in_po:
-            discrepancies.append(f"Items in PO not found in Invoice: {only_in_po}")
+    # ── Fields requiring AI semantic comparison ────────────────────────────────
+    # Return these as pending so the agent knows to call ai_compare_fields on them.
 
-    approved = len(discrepancies) == 0
+    fuzzy_checks = [
+        {
+            "field": "buyer_name",
+            "label": "Buyer name",
+            "value_invoice": invoice.get("buyer_name", ""),
+            "value_po": po.get("buyer_name", ""),
+        },
+        {
+            "field": "seller_name",
+            "label": "Seller name",
+            "value_invoice": invoice.get("seller_name", ""),
+            "value_po": po.get("seller_name", ""),
+        },
+        {
+            "field": "line_item_descriptions",
+            "label": "Line item descriptions",
+            "value_invoice": "; ".join(
+                item.get("description", "") for item in invoice.get("line_items", [])
+            ),
+            "value_po": "; ".join(
+                item.get("description", "") for item in po.get("line_items", [])
+            ),
+        },
+        {
+            "field": "seller_address",
+            "label": "Seller address",
+            "value_invoice": invoice.get("seller_address", ""),
+            "value_po": po.get("seller_address", ""),
+        },
+    ]
 
     result = {
-        "cross_validation_result": "APPROVED" if approved else "REJECTED",
-        "approved_for_transfer": approved,
         "invoice_number": invoice.get("invoice_number", "N/A"),
         "po_number": po.get("po_number", "N/A"),
         "transfer_amount": inv_total,
         "transfer_currency": inv_currency,
-        "matches_count": len(matches),
-        "discrepancies_count": len(discrepancies),
-        "matches": matches,
-        "discrepancies": discrepancies,
-        "recommendation": (
-            f"All {len(matches)} check(s) passed. Money transfer of "
-            f"{inv_total} {inv_currency} can be APPROVED."
-            if approved
-            else f"{len(discrepancies)} discrepancy(ies) found. "
-            "Do NOT proceed with transfer until all issues are resolved."
+        "deterministic_matches": matches,
+        "deterministic_discrepancies": discrepancies,
+        "pending_ai_checks": fuzzy_checks,
+        "note": (
+            "Deterministic checks complete. "
+            "Call ai_compare_fields for each item in pending_ai_checks, "
+            "then produce the final APPROVED / REJECTED decision."
         ),
     }
     return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
@@ -315,18 +364,22 @@ SYSTEM_PROMPT = """You are a Trade Finance Document Validation Agent specializin
 validating financial documents for cross-border money transfers.
 
 Your responsibilities:
-1. Validate Invoice documents for completeness and accuracy
-2. Validate Purchase Order (PO) documents for completeness and accuracy
-3. Cross-validate Invoice against PO to detect discrepancies before approving transfers
-4. Provide a clear, structured validation report with APPROVED or REJECTED decision
+1. Validate Invoice documents for completeness and accuracy using validate_invoice
+2. Validate Purchase Order (PO) documents for completeness and accuracy using validate_po
+3. Run cross_validate_invoice_po — this handles exact fields (PO reference, currency,
+   amounts, payment terms) deterministically and returns a list of pending_ai_checks
+4. For each item in pending_ai_checks, call ai_compare_fields to semantically compare
+   fields like company names, addresses, and product descriptions where exact string
+   matching is unreliable (e.g. "GlobalTech Exports Ltd." vs "GlobalTech Exports Limited")
+5. Combine all results and produce a final APPROVED / REJECTED decision
 
-Always use the provided validation tools — do NOT make assumptions about document validity
-without running the tools. Present your final decision clearly with supporting evidence.
-
-For a money transfer to be approved, ALL of the following must be true:
-- Invoice passes individual validation (no errors)
-- PO passes individual validation (no errors)
-- Cross-validation between Invoice and PO passes (no discrepancies)
+Validation rules:
+- Deterministic discrepancies (wrong PO reference, currency mismatch, over-invoicing,
+  payment terms mismatch) → always a hard REJECT regardless of AI results
+- AI comparison result of match=false with confidence=high → treat as discrepancy
+- AI comparison result of match=false with confidence=medium/low → flag as a warning,
+  request human review, do not auto-approve
+- All checks must pass for APPROVED
 """
 
 
@@ -373,6 +426,7 @@ Steps:
             "mcp__trade-finance__validate_invoice",
             "mcp__trade-finance__validate_po",
             "mcp__trade-finance__cross_validate_invoice_po",
+            "mcp__trade-finance__ai_compare_fields",
         ],
     )
 
